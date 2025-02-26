@@ -19,7 +19,7 @@ MESSAGE_MAP = {
     ],
     "deepseek": [
         "deepseek dark icon download high quality by No Headphone Gamerz",
-        {"type": "photo", "file": "deepseek.png"},
+        {"type": "photo", "file": "IMG_20250226_141147_673.jpg"},
         "⚠️ Deleting in 9 hours"
     ]
 }
