@@ -1,7 +1,3 @@
-Here’s a **README.md** file for your GitHub repository:  
-
----
-
 ### **🚀 Telegram Bot (Railway Deployment)**
 A simple Telegram bot deployed on **Railway.app** that supports **deep linking** and sends **messages & images**.
 
