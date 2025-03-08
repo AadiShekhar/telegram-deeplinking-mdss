@@ -7,6 +7,9 @@ if not BOT_TOKEN:
     raise ValueError("Please set the BOT_TOKEN environment variable")
 
 MESSAGE_MAP = {
+    "mvs": [
+        os.getenv("MVS_MESSAGE", "Message not configured"),
+    ],
     "mvs100": [
         os.getenv("MVS100_MESSAGE", "Message not configured"),
     ],
@@ -23,7 +26,8 @@ MESSAGE_MAP = {
 
 def start(update, context):
     chat_id = update.message.chat_id
-    args = context.args
+    args = context.args  # Extract command arguments
+
     if args and args[0] in MESSAGE_MAP:
         messages = MESSAGE_MAP[args[0]]
 
