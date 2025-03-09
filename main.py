@@ -28,7 +28,7 @@ mega = Mega()
 m = mega.login(MEGA_EMAIL, MEGA_PASSWORD)
 
 # Define file ranges for mdss commands.
-# For example, mdss1 sends files 1.mp3 to 100.mp3, mdss2 sends 101.mp3 to 200.mp3, etc.
+# For example, "mdss1" sends files 1.mp3 to 100.mp3, "mdss2" sends 101.mp3 to 200.mp3, etc.
 MDSS_RANGES = {
     "mdss1": (1, 100),
     "mdss2": (101, 200),
@@ -40,15 +40,20 @@ MDSS_RANGES = {
 
 def get_mega_file(file_name):
     """
-    Searches for a file with the exact name in the MEGA folder specified by MEGA_FOLDER_ID.
+    Searches for a file by name using MEGA's built-in find method.
+    Optionally checks that the file is in the designated folder.
     """
-    files = m.get_files()  # Returns a dictionary of file info
-    for fid, info in files.items():
-        # The file name is stored under the "a" key with sub-key "n"
-        if "a" in info and info["a"].get("n") == file_name:
-            # Check if the file is in the designated folder (the "p" key holds the parent folder id)
-            if info.get("p") == MEGA_FOLDER_ID:
-                return info
+    node = m.find(file_name, exclude_deleted=True)
+    if node:
+        # Uncomment the next lines if you want to enforce that the file is in the specified folder:
+        # if node.get("p") == MEGA_FOLDER_ID:
+        #     return node
+        # else:
+        #     logging.info("Found file %s but folder id does not match: found %s vs expected %s", 
+        #                  file_name, node.get("p"), MEGA_FOLDER_ID)
+        return node
+    else:
+        logging.info("File %s not found via m.find()", file_name)
     return None
 
 def start(update, context):
@@ -71,7 +76,7 @@ def start(update, context):
         if mega_file:
             local_path = f"/tmp/{file_name}"
             try:
-                # Download the file from MEGA into the /tmp directory
+                # Download the file from MEGA to the local /tmp directory.
                 m.download(mega_file, dest_path="/tmp")
                 with open(local_path, "rb") as audio_file:
                     context.bot.send_audio(chat_id=chat_id, audio=audio_file, filename=file_name)
@@ -88,12 +93,12 @@ def start(update, context):
 def run_bot():
     updater = Updater(BOT_TOKEN, use_context=True)
     dp = updater.dispatcher
-    # Handle the /start command; expects an argument like mdss1, mdss2, etc.
+    # Single /start command handler expecting an argument like mdss1
     dp.add_handler(CommandHandler("start", start, pass_args=True))
     updater.start_polling(clean=True)
     updater.idle()
 
-# Flask app for uptime (Railway expects an HTTP server)
+# Flask app for uptime monitoring (e.g., Railway)
 app = Flask(__name__)
 
 @app.route("/")
@@ -101,6 +106,6 @@ def home():
     return "Bot is running!"
 
 if __name__ == "__main__":
-    # Run Flask in a separate thread so the Telegram bot can run in the main thread (required for signal handling)
+    # Run Flask in a separate thread so the Telegram bot can run in the main thread.
     Thread(target=lambda: app.run(host="0.0.0.0", port=8080)).start()
     run_bot()
