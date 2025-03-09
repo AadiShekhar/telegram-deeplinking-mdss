@@ -1,7 +1,6 @@
 import os
 import base64
 import json
-import tempfile
 import logging
 from flask import Flask
 from telegram.ext import Updater, CommandHandler
@@ -21,7 +20,7 @@ GDRIVE_FOLDER_ID = os.getenv("GDRIVE_FOLDER_ID")
 if not GDRIVE_FOLDER_ID:
     raise ValueError("Please set the GDRIVE_FOLDER_ID environment variable")
 
-# Function to authenticate with Google Drive using a service account
+# Authenticate with Google Drive using a service account
 def get_google_drive():
     credentials_b64 = os.getenv("GDRIVE_CREDENTIALS")
     if not credentials_b64:
@@ -31,10 +30,10 @@ def get_google_drive():
     credentials_json = base64.b64decode(credentials_b64).decode("utf-8")
     service_account_info = json.loads(credentials_json)
     
-    # Set up PyDrive2 to use service account authentication
+    # Configure PyDrive2 for service account authentication using client_json_dict
     gauth = GoogleAuth()
     gauth.settings["client_config_backend"] = "service"
-    gauth.settings["service_config"] = service_account_info
+    gauth.settings["client_json_dict"] = service_account_info
     gauth.ServiceAuth()  # Authenticate using the service account credentials
     drive = GoogleDrive(gauth)
     return drive
@@ -52,14 +51,14 @@ MDSS_RANGES = {
     "mdss6": (501, 600),
 }
 
-# Helper function: retrieve a file by its exact name from the designated Drive folder
+# Helper function to get a file by its exact name from the designated folder
 def get_drive_file(file_name):
     query = f"'{GDRIVE_FOLDER_ID}' in parents and title = '{file_name}'"
     file_list = drive.ListFile({'q': query}).GetList()
     return file_list[0] if file_list else None
 
-# Telegram /start command handler.
-# Usage: /start mdss1  → Sends files 1.mp3 to 100.mp3, etc.
+# /start command handler
+# Usage: /start mdss1  → sends files 1.mp3 to 100.mp3, etc.
 def start(update, context):
     chat_id = update.message.chat_id
     args = context.args
@@ -93,13 +92,12 @@ def start(update, context):
 def run_bot():
     updater = Updater(BOT_TOKEN, use_context=True)
     dp = updater.dispatcher
-    # Add the /start command handler (which expects an argument like mdss1, mdss2, etc.)
     dp.add_handler(CommandHandler("start", start, pass_args=True))
-    # Start polling (clean=True helps avoid conflicts if another instance was running)
+    # Start polling. Using clean=True avoids potential conflicts.
     updater.start_polling(clean=True)
     updater.idle()
 
-# Set up a Flask app for Railway (or any uptime monitoring)
+# Flask app for uptime (Railway requires an HTTP server)
 app = Flask(__name__)
 
 @app.route("/")
@@ -107,8 +105,7 @@ def home():
     return "Bot is running!"
 
 if __name__ == "__main__":
-    # Run Flask in a separate thread so that the Telegram bot runs in the main thread (required for signal handling)
+    # Run Flask in a separate thread so the bot can run in the main thread (required for signal handling)
     flask_thread = Thread(target=lambda: app.run(host="0.0.0.0", port=8080))
     flask_thread.start()
-    # Run the Telegram bot in the main thread
     run_bot()
