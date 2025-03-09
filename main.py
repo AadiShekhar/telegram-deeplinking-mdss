@@ -1,12 +1,32 @@
-from telegram.ext import Updater, CommandHandler
 import os
-from flask import Flask
+from telegram.ext import Updater, CommandHandler
+from pydrive2.auth import GoogleAuth
+from pydrive2.drive import GoogleDrive
+from dotenv import load_dotenv
 
+# Load environment variables
+load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-if not BOT_TOKEN:
-    raise ValueError("Please set the BOT_TOKEN environment variable")
+GDRIVE_FOLDER_ID = os.getenv("GDRIVE_FOLDER_ID")
 
-# Define the message mapping for sending mp3 files
+# Authenticate Google Drive
+def authenticate_google_drive():
+    gauth = GoogleAuth()
+    gauth.LoadCredentialsFile("mycreds.txt")
+
+    if gauth.credentials is None:
+        gauth.LocalWebserverAuth()  # Open browser for first-time login
+    elif gauth.access_token_expired:
+        gauth.Refresh()
+    else:
+        gauth.Authorize()
+
+    gauth.SaveCredentialsFile("mycreds.txt")  # Save session
+    return GoogleDrive(gauth)
+
+drive = authenticate_google_drive()
+
+# Mapping for MP3 file ranges
 MDSS_MAP = {
     "mdss1": (1, 100),
     "mdss2": (101, 200),
@@ -16,25 +36,33 @@ MDSS_MAP = {
     "mdss6": (501, 600),
 }
 
-MDSS_FOLDER = "mdss"  # Folder where mp3 files are stored
+# Function to fetch a file from Google Drive
+def get_drive_file(file_name):
+    query = f"'{GDRIVE_FOLDER_ID}' in parents and title = '{file_name}'"
+    file_list = drive.ListFile({'q': query}).GetList()
+    return file_list[0] if file_list else None
 
+# Command Handler for /start
 def start(update, context):
     chat_id = update.message.chat_id
-    args = context.args  # Extract command arguments
+    args = context.args
 
     if args and args[0] in MDSS_MAP:
         start_num, end_num = MDSS_MAP[args[0]]
 
         for num in range(start_num, end_num + 1):
-            file_path = os.path.join(MDSS_FOLDER, f"{num}.mp3")
-            if os.path.exists(file_path):
-                context.bot.send_audio(chat_id=chat_id, audio=open(file_path, "rb"))
-            else:
-                context.bot.send_message(chat_id=chat_id, text=f"File {num}.mp3 not found.")
+            file_name = f"{num}.mp3"
+            drive_file = get_drive_file(file_name)
 
+            if drive_file:
+                file_url = drive_file['webContentLink']  # Direct download link
+                context.bot.send_audio(chat_id=chat_id, audio=file_url)
+            else:
+                context.bot.send_message(chat_id=chat_id, text=f"{file_name} not found in Drive.")
     else:
         context.bot.send_message(chat_id=chat_id, text="Invalid code or no code provided. Try again.")
 
+# Function to run the bot
 def run_bot():
     updater = Updater(BOT_TOKEN, use_context=True)
     dp = updater.dispatcher
@@ -42,7 +70,8 @@ def run_bot():
     updater.start_polling()
     updater.idle()
 
-# Flask app for Railway
+# Flask App for Railway
+from flask import Flask
 app = Flask(__name__)
 
 @app.route("/")
