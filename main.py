@@ -1,77 +1,94 @@
 import os
-from telegram.ext import Updater, CommandHandler
+import base64
+import json
+from flask import Flask
+from telegram import Update
+from telegram.ext import Updater, CommandHandler, CallbackContext
 from pydrive2.auth import GoogleAuth
 from pydrive2.drive import GoogleDrive
-from dotenv import load_dotenv
 
-# Load environment variables
-load_dotenv()
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-GDRIVE_FOLDER_ID = os.getenv("GDRIVE_FOLDER_ID")
-
-# Authenticate Google Drive
+# Load Google Drive credentials from Base64
 def authenticate_google_drive():
+    credentials_b64 = os.getenv("GOOGLE_CREDENTIALS_B64")
+    if not credentials_b64:
+        raise ValueError("GOOGLE_CREDENTIALS_B64 environment variable is missing")
+
+    credentials_json = base64.b64decode(credentials_b64).decode("utf-8")
+    temp_credentials_path = "/tmp/credentials.json"
+
+    with open(temp_credentials_path, "w") as f:
+        f.write(credentials_json)
+
     gauth = GoogleAuth()
-    gauth.LoadCredentialsFile("mycreds.txt")
-
-    if gauth.credentials is None:
-        gauth.LocalWebserverAuth()  # Open browser for first-time login
-    elif gauth.access_token_expired:
-        gauth.Refresh()
-    else:
-        gauth.Authorize()
-
-    gauth.SaveCredentialsFile("mycreds.txt")  # Save session
+    gauth.LoadCredentialsFile(temp_credentials_path)
+    gauth.LocalWebserverAuth()
     return GoogleDrive(gauth)
 
 drive = authenticate_google_drive()
 
-# Mapping for MP3 file ranges
-MDSS_MAP = {
-    "mdss1": (1, 100),
-    "mdss2": (101, 200),
-    "mdss3": (201, 300),
-    "mdss4": (301, 400),
-    "mdss5": (401, 500),
-    "mdss6": (501, 600),
-}
+# Bot Token & Admin Chat ID
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_ID = int(os.getenv("ADMIN_ID"))
 
-# Function to fetch a file from Google Drive
-def get_drive_file(file_name):
-    query = f"'{GDRIVE_FOLDER_ID}' in parents and title = '{file_name}'"
+# Fetch files from Google Drive based on range
+def get_files_from_drive(start, end):
+    query = f"title contains '.mp3'"
     file_list = drive.ListFile({'q': query}).GetList()
-    return file_list[0] if file_list else None
+    
+    matched_files = [
+        f for f in file_list if f["title"].endswith(".mp3")
+        and start <= int(f["title"].split(".")[0]) <= end
+    ]
+    
+    return matched_files
 
-# Command Handler for /start
-def start(update, context):
+# Command to send MP3s based on range
+def send_files(update: Update, context: CallbackContext):
     chat_id = update.message.chat_id
+    if chat_id != ADMIN_ID:
+        return  # Ignore non-admin users
+
     args = context.args
+    if not args or not args[0].isdigit():
+        context.bot.send_message(chat_id=chat_id, text="Usage: /start mdss1 - mdss6")
+        return
 
-    if args and args[0] in MDSS_MAP:
-        start_num, end_num = MDSS_MAP[args[0]]
+    range_map = {
+        "mdss1": (1, 100),
+        "mdss2": (101, 200),
+        "mdss3": (201, 300),
+        "mdss4": (301, 400),
+        "mdss5": (401, 500),
+        "mdss6": (501, 600),
+    }
 
-        for num in range(start_num, end_num + 1):
-            file_name = f"{num}.mp3"
-            drive_file = get_drive_file(file_name)
+    key = args[0].lower()
+    if key not in range_map:
+        context.bot.send_message(chat_id=chat_id, text="Invalid code. Use mdss1 - mdss6.")
+        return
 
-            if drive_file:
-                file_url = drive_file['webContentLink']  # Direct download link
-                context.bot.send_audio(chat_id=chat_id, audio=file_url)
-            else:
-                context.bot.send_message(chat_id=chat_id, text=f"{file_name} not found in Drive.")
-    else:
-        context.bot.send_message(chat_id=chat_id, text="Invalid code or no code provided. Try again.")
+    start, end = range_map[key]
+    files = get_files_from_drive(start, end)
 
-# Function to run the bot
+    if not files:
+        context.bot.send_message(chat_id=chat_id, text=f"No files found for {key}.")
+        return
+
+    for file in files:
+        file.GetContentFile(file["title"])
+        with open(file["title"], "rb") as f:
+            context.bot.send_audio(chat_id=chat_id, audio=f)
+        os.remove(file["title"])
+
+# Telegram Bot Setup
 def run_bot():
     updater = Updater(BOT_TOKEN, use_context=True)
     dp = updater.dispatcher
-    dp.add_handler(CommandHandler("start", start, pass_args=True))
+    dp.add_handler(CommandHandler("start", send_files, pass_args=True))
     updater.start_polling()
     updater.idle()
 
-# Flask App for Railway
-from flask import Flask
+# Flask app for Railway
 app = Flask(__name__)
 
 @app.route("/")
