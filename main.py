@@ -9,7 +9,7 @@ from threading import Thread
 # Enable logging for debugging
 logging.basicConfig(level=logging.INFO)
 
-# Validate essential environment variables
+# Validate required environment variables
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
     raise ValueError("Please set the BOT_TOKEN environment variable")
@@ -27,8 +27,8 @@ if not MEGA_FOLDER_ID:
 mega = Mega()
 m = mega.login(MEGA_EMAIL, MEGA_PASSWORD)
 
-# Define file ranges for each mdss command
-# For example, "mdss1" corresponds to files 1.mp3 to 100.mp3, etc.
+# Define file ranges for mdss commands.
+# For example, mdss1 sends files 1.mp3 to 100.mp3, mdss2 sends 101.mp3 to 200.mp3, etc.
 MDSS_RANGES = {
     "mdss1": (1, 100),
     "mdss2": (101, 200),
@@ -40,14 +40,13 @@ MDSS_RANGES = {
 
 def get_mega_file(file_name):
     """
-    Searches the MEGA account for a file with the given file_name
-    that resides in the folder specified by MEGA_FOLDER_ID.
+    Searches for a file with the exact name in the MEGA folder specified by MEGA_FOLDER_ID.
     """
-    files = m.get_files()  # returns a dictionary of file info
+    files = m.get_files()  # Returns a dictionary of file info
     for fid, info in files.items():
-        # In the MEGA file info, the name is stored in the "a" key with sub-key "n"
+        # The file name is stored under the "a" key with sub-key "n"
         if "a" in info and info["a"].get("n") == file_name:
-            # Check if the file is in the desired folder (the "p" key holds the parent folder id)
+            # Check if the file is in the designated folder (the "p" key holds the parent folder id)
             if info.get("p") == MEGA_FOLDER_ID:
                 return info
     return None
@@ -55,48 +54,46 @@ def get_mega_file(file_name):
 def start(update, context):
     chat_id = update.message.chat_id
     args = context.args
-    if not args:
-        context.bot.send_message(chat_id=chat_id, 
-            text="Welcome! Use `/start mdss1` (or mdss2, etc.) to get your MP3 files.")
-        return
-    command = args[0]
-    if command not in MDSS_RANGES:
-        context.bot.send_message(chat_id=chat_id, 
-            text="Invalid command. Usage: `/start mdss1` (or mdss2, mdss3, etc.)")
+    if not args or args[0] not in MDSS_RANGES:
+        context.bot.send_message(chat_id=chat_id,
+            text="Usage: /start mdss1 (or mdss2, mdss3, etc.)")
         return
 
+    command = args[0]
     start_num, end_num = MDSS_RANGES[command]
-    context.bot.send_message(chat_id=chat_id, 
+    context.bot.send_message(chat_id=chat_id,
         text=f"Sending files {start_num}.mp3 to {end_num}.mp3...")
 
-    # Loop through each expected file number
+    # Loop through the expected file numbers and send each file.
     for i in range(start_num, end_num + 1):
         file_name = f"{i}.mp3"
         mega_file = get_mega_file(file_name)
         if mega_file:
             local_path = f"/tmp/{file_name}"
             try:
-                # Download the file from MEGA to the /tmp directory
+                # Download the file from MEGA into the /tmp directory
                 m.download(mega_file, dest_path="/tmp")
                 with open(local_path, "rb") as audio_file:
                     context.bot.send_audio(chat_id=chat_id, audio=audio_file, filename=file_name)
             except Exception as e:
-                context.bot.send_message(chat_id=chat_id, text=f"Error sending {file_name}: {e}")
+                context.bot.send_message(chat_id=chat_id,
+                    text=f"Error sending {file_name}: {e}")
             finally:
                 if os.path.exists(local_path):
                     os.remove(local_path)
         else:
-            context.bot.send_message(chat_id=chat_id, text=f"File {file_name} not found on MEGA.")
+            context.bot.send_message(chat_id=chat_id,
+                text=f"File {file_name} not found on MEGA.")
 
 def run_bot():
     updater = Updater(BOT_TOKEN, use_context=True)
     dp = updater.dispatcher
-    # Single /start command handler that checks for an argument like "mdss1"
+    # Handle the /start command; expects an argument like mdss1, mdss2, etc.
     dp.add_handler(CommandHandler("start", start, pass_args=True))
     updater.start_polling(clean=True)
     updater.idle()
 
-# Flask app for uptime monitoring (e.g., Railway)
+# Flask app for uptime (Railway expects an HTTP server)
 app = Flask(__name__)
 
 @app.route("/")
@@ -104,6 +101,6 @@ def home():
     return "Bot is running!"
 
 if __name__ == "__main__":
-    # Run Flask in a separate thread so that the Telegram bot can run in the main thread (needed for signal handling)
+    # Run Flask in a separate thread so the Telegram bot can run in the main thread (required for signal handling)
     Thread(target=lambda: app.run(host="0.0.0.0", port=8080)).start()
     run_bot()
