@@ -6,37 +6,32 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
     raise ValueError("Please set the BOT_TOKEN environment variable")
 
-MESSAGE_MAP = {
-    "mvs": [
-        os.getenv("MVS_MESSAGE", "Message not configured"),
-    ],
-    "mvs100": [
-        os.getenv("MVS100_MESSAGE", "Message not configured"),
-    ],
-    "mvs200": [
-        "🚀 Welcome to MVS200! Start your journey here.",
-        "📝 Important instructions: Follow step 1, 2, and 3.",
-        "🎯 Good luck on your mission!"
-    ],
-    "deepseek": [
-        "deepseek dark icon download high quality by No Headphone Gamerz",
-        {"type": "photo", "file": "IMG_20250226_141147_673.jpg"},
-    ]
+# Define the message mapping for sending mp3 files
+MDSS_MAP = {
+    "mdss1": (1, 100),
+    "mdss2": (101, 200),
+    "mdss3": (201, 300),
+    "mdss4": (301, 400),
+    "mdss5": (401, 500),
+    "mdss6": (501, 600),
 }
+
+MDSS_FOLDER = "mdss"  # Folder where mp3 files are stored
 
 def start(update, context):
     chat_id = update.message.chat_id
     args = context.args  # Extract command arguments
 
-    if args and args[0] in MESSAGE_MAP:
-        messages = MESSAGE_MAP[args[0]]
+    if args and args[0] in MDSS_MAP:
+        start_num, end_num = MDSS_MAP[args[0]]
 
-        for msg in messages:
-            if isinstance(msg, dict) and msg["type"] == "photo":
-                with open(msg["file"], 'rb') as photo:
-                    context.bot.send_photo(chat_id=chat_id, photo=photo)
+        for num in range(start_num, end_num + 1):
+            file_path = os.path.join(MDSS_FOLDER, f"{num}.mp3")
+            if os.path.exists(file_path):
+                context.bot.send_audio(chat_id=chat_id, audio=open(file_path, "rb"))
             else:
-                context.bot.send_message(chat_id=chat_id, text=msg)
+                context.bot.send_message(chat_id=chat_id, text=f"File {num}.mp3 not found.")
+
     else:
         context.bot.send_message(chat_id=chat_id, text="Invalid code or no code provided. Try again.")
 
