@@ -1,17 +1,18 @@
 import os
 import base64
+import json
 import tempfile
 import logging
 from flask import Flask
 from telegram.ext import Updater, CommandHandler
 from pydrive2.auth import GoogleAuth
 from pydrive2.drive import GoogleDrive
-from oauth2client.service_account import ServiceAccountCredentials
+from threading import Thread
 
 # Enable logging for debugging
 logging.basicConfig(level=logging.INFO)
 
-# Validate environment variables
+# Validate essential environment variables
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
     raise ValueError("Please set the BOT_TOKEN environment variable")
@@ -26,34 +27,22 @@ def get_google_drive():
     if not credentials_b64:
         raise ValueError("GDRIVE_CREDENTIALS environment variable is missing!")
     
-    # Decode the Base64 string to obtain the JSON credentials
+    # Decode the Base64-encoded service account JSON
     credentials_json = base64.b64decode(credentials_b64).decode("utf-8")
+    service_account_info = json.loads(credentials_json)
     
-    # Write the JSON credentials to a temporary file
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".json") as temp_file:
-        temp_file.write(credentials_json.encode())
-        temp_credentials_path = temp_file.name
-
-    # Authenticate using the service account credentials
-    scope = ["https://www.googleapis.com/auth/drive"]
-    credentials = ServiceAccountCredentials.from_json_keyfile_name(temp_credentials_path, scope)
+    # Set up PyDrive2 to use service account authentication
     gauth = GoogleAuth()
-    gauth.credentials = credentials
+    gauth.settings["client_config_backend"] = "service"
+    gauth.settings["service_config"] = service_account_info
+    gauth.ServiceAuth()  # Authenticate using the service account credentials
     drive = GoogleDrive(gauth)
     return drive
 
 # Initialize Google Drive
 drive = get_google_drive()
 
-# Helper function to get a file by its exact name from the specified folder
-def get_drive_file(file_name):
-    query = f"'{GDRIVE_FOLDER_ID}' in parents and title = '{file_name}'"
-    file_list = drive.ListFile({'q': query}).GetList()
-    if file_list:
-        return file_list[0]
-    return None
-
-# Mapping for commands: mdss1 sends files 1.mp3 to 100.mp3, mdss2 sends 101.mp3 to 200.mp3, etc.
+# Define the file ranges for each mdss command
 MDSS_RANGES = {
     "mdss1": (1, 100),
     "mdss2": (101, 200),
@@ -63,20 +52,26 @@ MDSS_RANGES = {
     "mdss6": (501, 600),
 }
 
-# /start command handler
-# Usage: /start mdss1  (or mdss2, mdss3, etc.)
+# Helper function: retrieve a file by its exact name from the designated Drive folder
+def get_drive_file(file_name):
+    query = f"'{GDRIVE_FOLDER_ID}' in parents and title = '{file_name}'"
+    file_list = drive.ListFile({'q': query}).GetList()
+    return file_list[0] if file_list else None
+
+# Telegram /start command handler.
+# Usage: /start mdss1  → Sends files 1.mp3 to 100.mp3, etc.
 def start(update, context):
     chat_id = update.message.chat_id
     args = context.args
     if not args or args[0] not in MDSS_RANGES:
         context.bot.send_message(chat_id=chat_id, text="Usage: /start mdss1 (or mdss2, mdss3, etc.)")
         return
-    
+
     command = args[0]
     start_num, end_num = MDSS_RANGES[command]
     context.bot.send_message(chat_id=chat_id, text=f"Sending files {start_num}.mp3 to {end_num}.mp3...")
 
-    # Loop through the specified range and send each file
+    # Loop through the desired file numbers and send each file
     for i in range(start_num, end_num + 1):
         file_name = f"{i}.mp3"
         drive_file = get_drive_file(file_name)
@@ -98,11 +93,13 @@ def start(update, context):
 def run_bot():
     updater = Updater(BOT_TOKEN, use_context=True)
     dp = updater.dispatcher
+    # Add the /start command handler (which expects an argument like mdss1, mdss2, etc.)
     dp.add_handler(CommandHandler("start", start, pass_args=True))
-    updater.start_polling()
+    # Start polling (clean=True helps avoid conflicts if another instance was running)
+    updater.start_polling(clean=True)
     updater.idle()
 
-# Flask app (for Railway uptime pings)
+# Set up a Flask app for Railway (or any uptime monitoring)
 app = Flask(__name__)
 
 @app.route("/")
@@ -110,6 +107,8 @@ def home():
     return "Bot is running!"
 
 if __name__ == "__main__":
-    from threading import Thread
-    Thread(target=run_bot).start()
-    app.run(host="0.0.0.0", port=8080)
+    # Run Flask in a separate thread so that the Telegram bot runs in the main thread (required for signal handling)
+    flask_thread = Thread(target=lambda: app.run(host="0.0.0.0", port=8080))
+    flask_thread.start()
+    # Run the Telegram bot in the main thread
+    run_bot()
