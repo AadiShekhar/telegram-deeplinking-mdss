@@ -3,47 +3,57 @@ import base64
 import tempfile
 import logging
 from flask import Flask
+from telegram.ext import Updater, CommandHandler
 from pydrive2.auth import GoogleAuth
 from pydrive2.drive import GoogleDrive
 from oauth2client.service_account import ServiceAccountCredentials
-from telegram.ext import Updater, CommandHandler
 
-# ✅ Enable logging
+# Enable logging for debugging
 logging.basicConfig(level=logging.INFO)
 
-# ✅ Google Drive Authentication
-def get_google_drive():
-    credentials_b64 = os.getenv("GDRIVE_CREDENTIALS")
-    if not credentials_b64:
-        raise ValueError("⚠️ GDRIVE_CREDENTIALS environment variable is missing!")
-
-    # Convert Base64 to JSON
-    credentials_json = base64.b64decode(credentials_b64).decode('utf-8')
-
-    # Write to a temp file
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".json") as temp_file:
-        temp_file.write(credentials_json.encode())
-        temp_credentials_path = temp_file.name
-
-    try:
-        gauth = GoogleAuth()
-        scope = ["https://www.googleapis.com/auth/drive"]
-        gauth.credentials = ServiceAccountCredentials.from_json_keyfile_name(temp_credentials_path, scope)
-        return GoogleDrive(gauth)
-
-    except Exception as e:
-        logging.error(f"⚠️ Google Drive Authentication Failed: {e}")
-        raise
-
-# ✅ Initialize Google Drive
-drive = get_google_drive()
-
-# ✅ Telegram Bot Configuration
+# Validate environment variables
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
     raise ValueError("Please set the BOT_TOKEN environment variable")
 
-# ✅ File Ranges for `/mdssX` Commands
+GDRIVE_FOLDER_ID = os.getenv("GDRIVE_FOLDER_ID")
+if not GDRIVE_FOLDER_ID:
+    raise ValueError("Please set the GDRIVE_FOLDER_ID environment variable")
+
+# Function to authenticate with Google Drive using a service account
+def get_google_drive():
+    credentials_b64 = os.getenv("GDRIVE_CREDENTIALS")
+    if not credentials_b64:
+        raise ValueError("GDRIVE_CREDENTIALS environment variable is missing!")
+    
+    # Decode the Base64 string to obtain the JSON credentials
+    credentials_json = base64.b64decode(credentials_b64).decode("utf-8")
+    
+    # Write the JSON credentials to a temporary file
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".json") as temp_file:
+        temp_file.write(credentials_json.encode())
+        temp_credentials_path = temp_file.name
+
+    # Authenticate using the service account credentials
+    scope = ["https://www.googleapis.com/auth/drive"]
+    credentials = ServiceAccountCredentials.from_json_keyfile_name(temp_credentials_path, scope)
+    gauth = GoogleAuth()
+    gauth.credentials = credentials
+    drive = GoogleDrive(gauth)
+    return drive
+
+# Initialize Google Drive
+drive = get_google_drive()
+
+# Helper function to get a file by its exact name from the specified folder
+def get_drive_file(file_name):
+    query = f"'{GDRIVE_FOLDER_ID}' in parents and title = '{file_name}'"
+    file_list = drive.ListFile({'q': query}).GetList()
+    if file_list:
+        return file_list[0]
+    return None
+
+# Mapping for commands: mdss1 sends files 1.mp3 to 100.mp3, mdss2 sends 101.mp3 to 200.mp3, etc.
 MDSS_RANGES = {
     "mdss1": (1, 100),
     "mdss2": (101, 200),
@@ -53,49 +63,46 @@ MDSS_RANGES = {
     "mdss6": (501, 600),
 }
 
-# ✅ Start Command
+# /start command handler
+# Usage: /start mdss1  (or mdss2, mdss3, etc.)
 def start(update, context):
     chat_id = update.message.chat_id
-    context.bot.send_message(chat_id=chat_id, text="Welcome! Use /mdss1 to /mdss6 to receive MP3 files.")
-
-# ✅ Function to Send MP3 Files
-def send_files(update, context):
-    chat_id = update.message.chat_id
-    command = update.message.text.strip().lstrip("/")
-    
-    if command not in MDSS_RANGES:
-        context.bot.send_message(chat_id=chat_id, text="Invalid command. Use /mdss1 to /mdss6.")
+    args = context.args
+    if not args or args[0] not in MDSS_RANGES:
+        context.bot.send_message(chat_id=chat_id, text="Usage: /start mdss1 (or mdss2, mdss3, etc.)")
         return
     
+    command = args[0]
     start_num, end_num = MDSS_RANGES[command]
+    context.bot.send_message(chat_id=chat_id, text=f"Sending files {start_num}.mp3 to {end_num}.mp3...")
 
-    # ✅ Query Google Drive for MP3 files in range
-    query = f"'{os.getenv('GDRIVE_FOLDER_ID')}' in parents and mimeType='audio/mpeg'"
-    file_list = drive.ListFile({'q': query}).GetList()
+    # Loop through the specified range and send each file
+    for i in range(start_num, end_num + 1):
+        file_name = f"{i}.mp3"
+        drive_file = get_drive_file(file_name)
+        if drive_file:
+            local_path = f"/tmp/{file_name}"
+            try:
+                drive_file.GetContentFile(local_path)
+                with open(local_path, "rb") as audio_file:
+                    context.bot.send_audio(chat_id=chat_id, audio=audio_file, filename=file_name)
+            except Exception as e:
+                context.bot.send_message(chat_id=chat_id, text=f"Error sending {file_name}: {e}")
+            finally:
+                if os.path.exists(local_path):
+                    os.remove(local_path)
+        else:
+            context.bot.send_message(chat_id=chat_id, text=f"File {file_name} not found.")
 
-    found_files = [
-        file for file in file_list
-        if file["title"].endswith(".mp3") and start_num <= int(file["title"].split(".")[0]) <= end_num
-    ]
-
-    if found_files:
-        for file in found_files:
-            context.bot.send_document(chat_id=chat_id, document=file["downloadUrl"])
-    else:
-        context.bot.send_message(chat_id=chat_id, text="No MP3 files found in this range.")
-
-# ✅ Run Telegram Bot
+# Function to run the Telegram bot
 def run_bot():
     updater = Updater(BOT_TOKEN, use_context=True)
     dp = updater.dispatcher
-    dp.add_handler(CommandHandler("start", start))
-    for cmd in MDSS_RANGES.keys():
-        dp.add_handler(CommandHandler(cmd, send_files))
-    
+    dp.add_handler(CommandHandler("start", start, pass_args=True))
     updater.start_polling()
     updater.idle()
 
-# ✅ Flask App for Railway
+# Flask app (for Railway uptime pings)
 app = Flask(__name__)
 
 @app.route("/")
