@@ -1,11 +1,9 @@
 import os
-import base64
-import json
 import logging
+import tempfile
 from flask import Flask
 from telegram.ext import Updater, CommandHandler
-from pydrive2.auth import GoogleAuth
-from pydrive2.drive import GoogleDrive
+from mega import Mega
 from threading import Thread
 
 # Enable logging for debugging
@@ -16,32 +14,21 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
     raise ValueError("Please set the BOT_TOKEN environment variable")
 
-GDRIVE_FOLDER_ID = os.getenv("GDRIVE_FOLDER_ID")
-if not GDRIVE_FOLDER_ID:
-    raise ValueError("Please set the GDRIVE_FOLDER_ID environment variable")
+MEGA_EMAIL = os.getenv("MEGA_EMAIL")
+MEGA_PASSWORD = os.getenv("MEGA_PASSWORD")
+if not MEGA_EMAIL or not MEGA_PASSWORD:
+    raise ValueError("Please set the MEGA_EMAIL and MEGA_PASSWORD environment variables")
 
-# Authenticate with Google Drive using a service account
-def get_google_drive():
-    credentials_b64 = os.getenv("GDRIVE_CREDENTIALS")
-    if not credentials_b64:
-        raise ValueError("GDRIVE_CREDENTIALS environment variable is missing!")
-    
-    # Decode the Base64-encoded service account JSON
-    credentials_json = base64.b64decode(credentials_b64).decode("utf-8")
-    service_account_info = json.loads(credentials_json)
-    
-    # Configure PyDrive2 for service account authentication using client_json_dict
-    gauth = GoogleAuth()
-    gauth.settings["client_config_backend"] = "service"
-    gauth.settings["client_json_dict"] = service_account_info
-    gauth.ServiceAuth()  # Authenticate using the service account credentials
-    drive = GoogleDrive(gauth)
-    return drive
+MEGA_FOLDER_ID = os.getenv("MEGA_FOLDER_ID")
+if not MEGA_FOLDER_ID:
+    raise ValueError("Please set the MEGA_FOLDER_ID environment variable")
 
-# Initialize Google Drive
-drive = get_google_drive()
+# Authenticate with MEGA
+mega = Mega()
+m = mega.login(MEGA_EMAIL, MEGA_PASSWORD)
 
-# Define the file ranges for each mdss command
+# Define file ranges for each mdss command
+# For example, "mdss1" corresponds to files 1.mp3 to 100.mp3, etc.
 MDSS_RANGES = {
     "mdss1": (1, 100),
     "mdss2": (101, 200),
@@ -51,33 +38,46 @@ MDSS_RANGES = {
     "mdss6": (501, 600),
 }
 
-# Helper function to get a file by its exact name from the designated folder
-def get_drive_file(file_name):
-    query = f"'{GDRIVE_FOLDER_ID}' in parents and title = '{file_name}'"
-    file_list = drive.ListFile({'q': query}).GetList()
-    return file_list[0] if file_list else None
+def get_mega_file(file_name):
+    """
+    Searches the MEGA account for a file with the given file_name
+    that resides in the folder specified by MEGA_FOLDER_ID.
+    """
+    files = m.get_files()  # returns a dictionary of file info
+    for fid, info in files.items():
+        # In the MEGA file info, the name is stored in the "a" key with sub-key "n"
+        if "a" in info and info["a"].get("n") == file_name:
+            # Check if the file is in the desired folder (the "p" key holds the parent folder id)
+            if info.get("p") == MEGA_FOLDER_ID:
+                return info
+    return None
 
-# /start command handler
-# Usage: /start mdss1  → sends files 1.mp3 to 100.mp3, etc.
 def start(update, context):
     chat_id = update.message.chat_id
     args = context.args
-    if not args or args[0] not in MDSS_RANGES:
-        context.bot.send_message(chat_id=chat_id, text="Usage: /start mdss1 (or mdss2, mdss3, etc.)")
+    if not args:
+        context.bot.send_message(chat_id=chat_id, 
+            text="Welcome! Use `/start mdss1` (or mdss2, etc.) to get your MP3 files.")
+        return
+    command = args[0]
+    if command not in MDSS_RANGES:
+        context.bot.send_message(chat_id=chat_id, 
+            text="Invalid command. Usage: `/start mdss1` (or mdss2, mdss3, etc.)")
         return
 
-    command = args[0]
     start_num, end_num = MDSS_RANGES[command]
-    context.bot.send_message(chat_id=chat_id, text=f"Sending files {start_num}.mp3 to {end_num}.mp3...")
+    context.bot.send_message(chat_id=chat_id, 
+        text=f"Sending files {start_num}.mp3 to {end_num}.mp3...")
 
-    # Loop through the desired file numbers and send each file
+    # Loop through each expected file number
     for i in range(start_num, end_num + 1):
         file_name = f"{i}.mp3"
-        drive_file = get_drive_file(file_name)
-        if drive_file:
+        mega_file = get_mega_file(file_name)
+        if mega_file:
             local_path = f"/tmp/{file_name}"
             try:
-                drive_file.GetContentFile(local_path)
+                # Download the file from MEGA to the /tmp directory
+                m.download(mega_file, dest_path="/tmp")
                 with open(local_path, "rb") as audio_file:
                     context.bot.send_audio(chat_id=chat_id, audio=audio_file, filename=file_name)
             except Exception as e:
@@ -86,18 +86,17 @@ def start(update, context):
                 if os.path.exists(local_path):
                     os.remove(local_path)
         else:
-            context.bot.send_message(chat_id=chat_id, text=f"File {file_name} not found.")
+            context.bot.send_message(chat_id=chat_id, text=f"File {file_name} not found on MEGA.")
 
-# Function to run the Telegram bot
 def run_bot():
     updater = Updater(BOT_TOKEN, use_context=True)
     dp = updater.dispatcher
+    # Single /start command handler that checks for an argument like "mdss1"
     dp.add_handler(CommandHandler("start", start, pass_args=True))
-    # Start polling. Using clean=True avoids potential conflicts.
     updater.start_polling(clean=True)
     updater.idle()
 
-# Flask app for uptime (Railway requires an HTTP server)
+# Flask app for uptime monitoring (e.g., Railway)
 app = Flask(__name__)
 
 @app.route("/")
@@ -105,7 +104,6 @@ def home():
     return "Bot is running!"
 
 if __name__ == "__main__":
-    # Run Flask in a separate thread so the bot can run in the main thread (required for signal handling)
-    flask_thread = Thread(target=lambda: app.run(host="0.0.0.0", port=8080))
-    flask_thread.start()
+    # Run Flask in a separate thread so that the Telegram bot can run in the main thread (needed for signal handling)
+    Thread(target=lambda: app.run(host="0.0.0.0", port=8080)).start()
     run_bot()
