@@ -36,6 +36,8 @@ MDSS_RANGES = {
     "mdss4": (301, 400),
     "mdss5": (401, 500),
     "mdss6": (501, 600),
+    "mdss7": (601, 700),
+    "mdss8": (701, 800),
 }
 
 def get_mega_file(file_name):
